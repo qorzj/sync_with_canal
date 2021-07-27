@@ -1,0 +1,2 @@
+# sync_with_canal
+基于canal和python的数据库同步工具
