@@ -1,0 +1,5 @@
+lesscli
+protobuf
+canal-python
+mysql-connector
+toml

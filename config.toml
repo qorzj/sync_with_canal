@@ -1,0 +1,16 @@
+databases = "db1,db2"  # 需要同步的数据库（逗号分割）
+error_log_path = ""  # 异常日志文件路径（空串则输出到stderr）
+
+[canal]  # canal的配置项
+host = "127.0.0.1"
+port = 11111
+username = ""
+password = ""
+client_id = '1001'
+destination = 'example'
+
+[dest_mysql]  # 目标mysql的配置项
+host = "127.0.0.1"
+port = 3306
+username = ""
+password = ""
