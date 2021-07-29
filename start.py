@@ -15,7 +15,16 @@ def load_config(config_path: Path):
     return toml.loads(config_text)
 
 
-def handle_canal_entry(entry, privary_key_map, verbose, write, dest_mycursor):
+def get_primary_pair(columns, full_tablename, primary_key_map):
+    if primary_key_map:
+        primary_key = primary_key_map[full_tablename]
+        primary_value = {column.name: column.value for column in columns}[primary_key]
+        return primary_key, primary_value
+    else:
+        return '?', '?'
+
+
+def handle_canal_entry(entry, primary_key_map, verbose, write, dest_mycursor):
     row_change = EntryProtocol_pb2.RowChange()
     row_change.MergeFromString(entry.storeValue)
     header = entry.header
@@ -27,14 +36,11 @@ def handle_canal_entry(entry, privary_key_map, verbose, write, dest_mycursor):
             event_type == EntryProtocol_pb2.EventType.UPDATE):
         return
     full_tablename = f"`{database}`.`{table}`"
-    privary_key = privary_key_map[full_tablename]
     for row in row_change.rowDatas:
-        sql = ''
-        sql_params = []
         if event_type == EntryProtocol_pb2.EventType.DELETE:
-            privary_value = {column.name: column.value for column in row.beforeColumns}[privary_key]
-            sql = f'DELETE FROM {full_tablename} WHERE {privary_key}=%s'
-            sql_params = [privary_value]
+            primary_key, primary_value = get_primary_pair(row.beforeColumns, full_tablename, primary_key_map)
+            sql = f'DELETE FROM {full_tablename} WHERE {primary_key}=%s'
+            sql_params = [primary_value]
         elif event_type == EntryProtocol_pb2.EventType.INSERT:
             row_data = {column.name: column.value for column in row.afterColumns}
             keys_text = ','.join(row_data.keys())
@@ -42,11 +48,11 @@ def handle_canal_entry(entry, privary_key_map, verbose, write, dest_mycursor):
             sql = f'INSERT INTO {full_tablename}({keys_text}) VALUES ({vals_text})'
             sql_params = list(row_data.values())
         elif event_type == EntryProtocol_pb2.EventType.UPDATE:
-            privary_value = {column.name: column.value for column in row.beforeColumns}[privary_key]
+            primary_key, primary_value = get_primary_pair(row.beforeColumns, full_tablename, primary_key_map)
             row_data = {column.name: column.value for column in row.afterColumns}
             keys_text = ','.join(x + '=%s' for x in row_data.keys())
-            sql = f'UPDATE {full_tablename} SET {keys_text} WHERE {privary_key}=%s'
-            sql_params = list(row_data.values()) + [privary_value]
+            sql = f'UPDATE {full_tablename} SET {keys_text} WHERE {primary_key}=%s'
+            sql_params = list(row_data.values()) + [primary_value]
         else:
             continue
         if verbose:
