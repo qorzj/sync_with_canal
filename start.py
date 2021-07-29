@@ -15,16 +15,18 @@ def load_config(config_path: Path):
     return toml.loads(config_text)
 
 
-def get_primary_pair(columns, full_tablename, primary_key_map):
-    if primary_key_map:
-        primary_key = primary_key_map[full_tablename]
-        primary_value = {column.name: column.value for column in columns}[primary_key]
-        return primary_key, primary_value
-    else:
-        return '?', '?'
+def get_primary_pair(columns):
+    for column in columns:
+        if column.isKey:
+            return column.name, column.value
+    return '?', '?'
 
 
-def handle_canal_entry(entry, primary_key_map, verbose, write, dest_mycursor):
+def str_or_null(column):
+    return None if column.isNull else column.value
+
+
+def handle_canal_entry(entry, verbose, write, dest_mycursor):
     row_change = EntryProtocol_pb2.RowChange()
     row_change.MergeFromString(entry.storeValue)
     header = entry.header
@@ -38,20 +40,20 @@ def handle_canal_entry(entry, primary_key_map, verbose, write, dest_mycursor):
     full_tablename = f"`{database}`.`{table}`"
     for row in row_change.rowDatas:
         if event_type == EntryProtocol_pb2.EventType.DELETE:
-            primary_key, primary_value = get_primary_pair(row.beforeColumns, full_tablename, primary_key_map)
-            sql = f'DELETE FROM {full_tablename} WHERE {primary_key}=%s'
+            primary_key, primary_value = get_primary_pair(row.beforeColumns)
+            sql = f'DELETE FROM {full_tablename} WHERE `{primary_key}`=%s'
             sql_params = [primary_value]
         elif event_type == EntryProtocol_pb2.EventType.INSERT:
-            row_data = {column.name: column.value for column in row.afterColumns}
-            keys_text = ','.join(row_data.keys())
+            row_data = {column.name: str_or_null(column) for column in row.afterColumns}
+            keys_text = ','.join(f'`{x}`' for x in row_data.keys())
             vals_text = ','.join('%s' for x in row_data.keys())
             sql = f'INSERT INTO {full_tablename}({keys_text}) VALUES ({vals_text})'
             sql_params = list(row_data.values())
         elif event_type == EntryProtocol_pb2.EventType.UPDATE:
-            primary_key, primary_value = get_primary_pair(row.beforeColumns, full_tablename, primary_key_map)
-            row_data = {column.name: column.value for column in row.afterColumns}
-            keys_text = ','.join(x + '=%s' for x in row_data.keys())
-            sql = f'UPDATE {full_tablename} SET {keys_text} WHERE {primary_key}=%s'
+            primary_key, primary_value = get_primary_pair(row.beforeColumns)
+            row_data = {column.name: str_or_null(column) for column in row.afterColumns}
+            keys_text = ','.join(f'`{x}`=%s' for x in row_data.keys())
+            sql = f'UPDATE {full_tablename} SET {keys_text} WHERE `{primary_key}`=%s'
             sql_params = list(row_data.values()) + [primary_value]
         else:
             continue
@@ -62,18 +64,6 @@ def handle_canal_entry(entry, primary_key_map, verbose, write, dest_mycursor):
                 dest_mycursor.execute(sql, sql_params)
             except Exception as e:
                 logging.error(f'sql execute failed! error={type(e)} message=[{e}] sql=[{sql}] params={sql_params}')
-
-
-def query_primary_key_map(dest_mydb, databases):
-    primary_key_map = {}
-    keys_text = ' or '.join('TABLE_SCHEMA=%s' for x in databases)
-    sql = f'select TABLE_SCHEMA,TABLE_NAME,COLUMN_NAME from information_schema.COLUMNS where ({keys_text}) and COLUMN_KEY="PRI"'
-    dest_mycursor = dest_mydb.cursor()
-    dest_mycursor.execute(sql, databases)
-    for (db_name, table_name, col_name) in dest_mycursor.fetchall():
-        full_tablename = f"`{db_name}`.`{table_name}`"
-        primary_key_map[full_tablename] = col_name
-    return primary_key_map
 
 
 def sync_with_canal(config, *, write, verbose):
@@ -97,7 +87,6 @@ def sync_with_canal(config, *, write, verbose):
     if verbose:
         print('filter:', f'({filter_db_part})\\..*')
     dest_mydb = None
-    primary_key_map = {}
     if write:
         dest_mydb = mysql.connector.connect(
             host=dest_mysql_config['host'],
@@ -105,9 +94,6 @@ def sync_with_canal(config, *, write, verbose):
             user=dest_mysql_config['username'],
             passwd=dest_mysql_config['password'],
         )
-        primary_key_map = query_primary_key_map(dest_mydb, databases)
-        if verbose:
-            print(f'primary_key_map={primary_key_map}')
     try:
         dest_mycursor = None
         while True:
@@ -118,7 +104,7 @@ def sync_with_canal(config, *, write, verbose):
             for entry in entries:
                 if entry.entryType in [EntryProtocol_pb2.EntryType.TRANSACTIONBEGIN, EntryProtocol_pb2.EntryType.TRANSACTIONEND]:
                     continue
-                handle_canal_entry(entry, primary_key_map, verbose, write, dest_mycursor)
+                handle_canal_entry(entry, verbose, write, dest_mycursor)
             if write:
                 dest_mydb.commit()
             time.sleep(0.5)
