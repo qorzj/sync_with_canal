@@ -92,8 +92,10 @@ def sync_with_canal(config, *, write, verbose):
     canal_client.subscribe(
         client_id=canal_config['client_id'].encode(),
         destination=canal_config['destination'].encode(),
-        filter=f'{filter_db_part}\\..*'.encode(),
+        filter=f'({filter_db_part})\\..*'.encode(),
     )
+    if verbose:
+        print('filter:', f'({filter_db_part})\\..*')
     dest_mydb = None
     primary_key_map = {}
     if write:
